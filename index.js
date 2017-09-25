@@ -9,14 +9,14 @@
 
 'use strict'
 
-import * as jsType from './jsType'
+import * as jstype from './jsType'
 
 const types = {
-  string: jsType.types.string,
-  number: jsType.types.number,
-  boolean: jsType.types.boolean,
-  array: jsType.types.array,
-  object: jsType.types.object
+  string: jstype.types.string,
+  number: jstype.types.number,
+  boolean: jstype.types.boolean,
+  array: jstype.types.array,
+  object: jstype.types.object
 }
 
 const typesArr = [
@@ -31,10 +31,10 @@ class ModelPropTypeDefinition {
   constructor (keypath = null) {
     this._options = {
       type: types.string,
-      default: null,
-      required: false,
-      oneOf: null,
-      filter: null,
+      optional: false,
+      default: undefined,
+      oneOf: undefined,
+      filter: undefined,
       keypath: keypath
     }
   }
@@ -46,15 +46,15 @@ class ModelPropTypeDefinition {
     return this
   }
 
+  optional () {
+    this._options['optional'] = true
+    return this
+  }
+
   default (defaultValue) {
     if (defaultValue !== undefined) {
       this._options['default'] = defaultValue
     }
-    return this
-  }
-
-  required () {
-    this._options['required'] = true
     return this
   }
 
@@ -80,42 +80,28 @@ function define (keypath = null) {
 class Model {
   _values = {}
 
-  defineProperty (name, getter) {
-    Object.defineProperty(this, name, {
-        enumerable: true,
-        get: () => {
-        if (this._values[name] === undefined) {
-      const value = getter()
-      getter = undefined
-      this._values[name] = value !== undefined ? value : null
-    }
-    return this._values[name]
-  },
-    set: newValue => {
-      newValue = newValue !== undefined ? newValue : null
-      this._values[name] = newValue
-    }
-  })
+  constructor () {
+    Object.defineProperty(this, '_values', {
+      enumerable: false
+    })
   }
 
-  dump () {
-    const object = {}
-    for (const prop in this) {
-      if (prop === '_values') {
-        continue
+  defineProperty (name, getter) {
+    Object.defineProperty(this, name, {
+      enumerable: true,
+      get: () => {
+        if (this._values[name] === undefined) {
+          const value = getter()
+          getter = undefined
+          this._values[name] = value !== undefined ? value : null
+        }
+        return this._values[name]
+      },
+      set: newValue => {
+        newValue = newValue !== undefined ? newValue : null
+        this._values[name] = newValue
       }
-
-      const value = this[prop]
-      if (value && value.dump) {
-        object[prop] = value.dump()
-      } else if (jsType.isArray(value)) {
-        object[prop] = value.map(val => val && val.dump ? val.dump() : val)
-      } else {
-        object[prop] = value
-      }
-    }
-
-    return object
+    })
   }
 }
 
@@ -131,7 +117,7 @@ class ModelMaker {
     for (const name in this._definitions) {
       let typeObject = this._definitions[name]
       let definition
-      if (jsType.isString(typeObject)) {
+      if (jstype.isString(typeObject)) {
         definition = define(typeObject)._options
       } else {
         definition = typeObject._options
@@ -151,7 +137,12 @@ class ModelMaker {
       model.defineProperty(name, getter)
     }
 
-    return model
+    return Object.keys(model).reduce((result, key) => {
+      if (key.indexOf('_') !== 0) {
+        result[key] = model[key]
+      }
+      return result
+    }, {})
   }
 
   _validateDefinition (name, options) {
@@ -164,25 +155,29 @@ class ModelMaker {
     } = options
 
     if (keypath === null) {
-      if (!(defaultValue || filter)) {
+      if (!(defaultValue !== undefined || filter)) {
         this._optionError(name, 'default', 'magic property must have an unempty default value or filter')
       }
     } else {
-      if (!jsType.isNonemptyString(keypath)) {
+      if (defaultValue !== undefined && !jstype.isTypeOf(defaultValue, type)) {
+        this._optionError(name, 'default', `must be type of '${type}'`)
+      }
+
+      if (!jstype.isNonemptyString(keypath)) {
         this._optionError(name, 'keypath', 'must be an nonempty string')
       }
 
-      if (!jsType.isOneOf(type, typesArr)) {
+      if (!jstype.isOneOf(type, typesArr)) {
         this._optionError(name, 'type', `must be one of (${typesArr.join(',')})`)
       }
 
       if (oneOf) {
-        if (!jsType.isArray(oneOf)) {
+        if (!jstype.isArray(oneOf)) {
           this._optionError(name, 'oneOf', 'must be an array')
         }
 
         for (let value of oneOf) {
-          if (!jsType.isTypeOf(value, type)) {
+          if (!jstype.isTypeOf(value, type)) {
             this._optionError(name, 'oneOf', `all items must be type of '${type}'`)
           }
         }
@@ -191,11 +186,11 @@ class ModelMaker {
 
     if (filter) {
       if (type === types.array || type === types.object) {
-        if (!jsType.isFunction(filter) && !jsType.isObject(filter)) {
+        if (!jstype.isFunction(filter) && !jstype.isObject(filter)) {
           this._optionError(name, 'filter', 'must be a function or an object')
         }
       } else {
-        if (!jsType.isFunction(filter)) {
+        if (!jstype.isFunction(filter)) {
           this._optionError(name, 'filter', 'must be a function')
         }
       }
@@ -210,55 +205,66 @@ class ModelMaker {
     let paths = definition.keypath.split('.')
     let value = this._model
     for (let key of paths) {
-      if (jsType.isObject(value)) {
+      if (jstype.isObject(value)) {
         value = value[key]
       } else {
+        value = undefined
         break
       }
     }
     value = value !== undefined ? value : null
+    if (value === null) {
+      if (definition.default) {
+        value = definition.default
+      } else if (!definition.optional) {
+        switch (definition.type) {
+          case types.string: value = ''
+            break
+          case types.number: value = 0
+            break
+          case types.boolean: value = false
+            break
+          case types.array: value = []
+            break
+          case types.object: value = {}
+            break
+        }
+      }
+    }
+
     return value
   }
 
   _validateRawValue (name, rawValue, definition) {
-    if (definition.required && rawValue === null) {
-      throw new Error(`Prop '${name}' is required.`)
-    }
-
-    if (rawValue !== null && !jsType.isTypeOf(rawValue, definition.type)) {
+    if (rawValue !== null && !jstype.isTypeOf(rawValue, definition.type)) {
       throw new Error(`Prop '${name}' must be type of '${definition.type}'.`)
     }
 
     if (rawValue !== null && definition.oneOf) {
-      if (!jsType.isOneOf(rawValue, definition.oneOf)) {
+      if (!jstype.isOneOf(rawValue, definition.oneOf)) {
         throw new Error(`Prop '${name}' must one of (${definition.oneOf.join(',')}).`)
       }
     }
   }
 
   _getPropertyGetter (rawValue, definition) {
-    let { filter, default: defaultValue } = definition
+    let { filter } = definition
 
     return function () {
-      if (filter && (jsType.isObject(filter) || jsType.isArray(filter))) {
+      if (filter && (jstype.isObject(filter) || jstype.isArray(filter))) {
         filter = convertFilter(filter)
       }
 
-      let value = filter ? filter(rawValue, this) : rawValue
-      if (value === null && defaultValue !== null) {
-        value = defaultValue
-      }
-
-      return value
+      return filter ? filter(rawValue, this) : rawValue
     }
   }
 }
 
 function convertFilter (props) {
   return (value) => {
-    if (jsType.isObject(value)) {
+    if (jstype.isObject(value)) {
       return convert(value, props)
-    } else if (jsType.isArray(value)) {
+    } else if (jstype.isArray(value)) {
       return convertArray(value, props)
     }
 
@@ -272,7 +278,7 @@ function convert (object, definitions) {
 }
 
 function convertArray (objects, definitions) {
-  if (!jsType.isArray(objects)) {
+  if (!jstype.isArray(objects)) {
     return []
   }
 
