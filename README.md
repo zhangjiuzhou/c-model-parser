@@ -8,6 +8,7 @@
 * 默认值
 * 可选值
 * 过滤
+* 模型数组、子模型
 
 # Example
 ```javascript
