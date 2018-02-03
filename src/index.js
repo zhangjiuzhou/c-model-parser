@@ -9,28 +9,31 @@
 
 'use strict'
 
-import * as jstype from './jsType'
+import * as jstype from 'c-jstype'
 
-const types = {
-  string: jstype.types.string,
-  number: jstype.types.number,
-  boolean: jstype.types.boolean,
-  array: jstype.types.array,
-  object: jstype.types.object
+let devMode = true
+function setDev (dev) {
+  devMode = dev
 }
 
+const string = jstype.types.string
+const number = jstype.types.number
+const boolean = jstype.types.boolean
+const array = jstype.types.array
+const object = jstype.types.object
+
 const typesArr = [
-  types.string,
-  types.number,
-  types.boolean,
-  types.array,
-  types.object
+  string,
+  number,
+  boolean,
+  array,
+  object
 ]
 
-class ModelPropTypeDefinition {
+class ModelPropType {
   constructor (keypath = null) {
     this._options = {
-      type: types.string,
+      type: string,
       optional: false,
       default: undefined,
       oneOf: undefined,
@@ -46,21 +49,21 @@ class ModelPropTypeDefinition {
     return this
   }
 
+  oneOf (values) {
+    if (values !== undefined) {
+      this._options['oneOf'] = values
+    }
+    return this
+  }
+
   optional () {
     this._options['optional'] = true
     return this
   }
 
-  default (defaultValue) {
+  defaultValue (defaultValue) {
     if (defaultValue !== undefined) {
       this._options['default'] = defaultValue
-    }
-    return this
-  }
-
-  oneOf (values) {
-    if (values !== undefined) {
-      this._options['oneOf'] = values
     }
     return this
   }
@@ -71,10 +74,6 @@ class ModelPropTypeDefinition {
     }
     return this
   }
-}
-
-function define (keypath = null) {
-  return new ModelPropTypeDefinition(keypath)
 }
 
 class Model {
@@ -118,19 +117,21 @@ class ModelMaker {
       let typeObject = this._definitions[name]
       let definition
       if (jstype.isString(typeObject)) {
-        definition = define(typeObject)._options
+        definition = propType(typeObject)._options
       } else {
         definition = typeObject._options
       }
 
-      if (__DEV__) {
+      if (devMode) {
         this._validateDefinition(name, definition)
       }
 
       let value = null
       if (definition.keypath) {
         value = this._getRawValue(definition)
-        this._validateRawValue(name, value, definition)
+        if (!this._validateRawValue(name, value, definition)) {
+          value = this._getDefaultValue(definition)
+        }
       }
 
       const getter = this._getPropertyGetter(value, definition).bind(model)
@@ -163,8 +164,8 @@ class ModelMaker {
         this._optionError(name, 'default', `must be type of '${type}'`)
       }
 
-      if (!jstype.isNonemptyString(keypath)) {
-        this._optionError(name, 'keypath', 'must be an nonempty string')
+      if (!keypath || !jstype.isString(keypath)) {
+        this._optionError(name, 'keypath', 'must be an non-empty string')
       }
 
       if (!jstype.isOneOf(type, typesArr)) {
@@ -185,7 +186,7 @@ class ModelMaker {
     }
 
     if (filter) {
-      if (type === types.array || type === types.object) {
+      if (type === array || type === object) {
         if (!jstype.isFunction(filter) && !jstype.isObject(filter)) {
           this._optionError(name, 'filter', 'must be a function or an object')
         }
@@ -212,39 +213,53 @@ class ModelMaker {
         break
       }
     }
-    value = value !== undefined ? value : null
+    value = !jstype.isUndefined(value) ? value : null
     if (value === null) {
-      if (definition.default) {
-        value = definition.default
-      } else if (!definition.optional) {
-        switch (definition.type) {
-          case types.string: value = ''
-            break
-          case types.number: value = 0
-            break
-          case types.boolean: value = false
-            break
-          case types.array: value = []
-            break
-          case types.object: value = {}
-            break
-        }
-      }
+      value = this._getDefaultValue(definition)
     }
 
     return value
   }
 
+  _getDefaultValue (definition) {
+    let value = null
+    if (definition.default) {
+      value = definition.default
+    } else if (!definition.optional) {
+      if (!definition.oneOf || definition.oneOf.length === 0) {
+        switch (definition.type) {
+          case string: value = ''
+            break
+          case number: value = 0
+            break
+          case boolean: value = false
+            break
+          case array: value = []
+            break
+          case object: value = {}
+            break
+        }
+      } else {
+        value = definition.oneOf[0]
+      }
+    }
+    return value
+  }
+
   _validateRawValue (name, rawValue, definition) {
     if (rawValue !== null && !jstype.isTypeOf(rawValue, definition.type)) {
-      throw new Error(`Prop '${name}' must be type of '${definition.type}'.`)
+      console.warn(`Prop '${name}' should be type of '${definition.type}'.`)
+      return false
     }
 
     if (rawValue !== null && definition.oneOf) {
       if (!jstype.isOneOf(rawValue, definition.oneOf)) {
-        throw new Error(`Prop '${name}' must one of (${definition.oneOf.join(',')}).`)
+        console.warn(`Prop '${name}' should be one of (${definition.oneOf.join(',')}).`)
+        return false
       }
     }
+
+    return true
   }
 
   _getPropertyGetter (rawValue, definition) {
@@ -252,49 +267,61 @@ class ModelMaker {
 
     return function () {
       if (filter && (jstype.isObject(filter) || jstype.isArray(filter))) {
-        filter = convertFilter(filter)
+        filter = modelFilter(filter)
       }
 
-      return filter ? filter(rawValue, this) : rawValue
+      if (filter) {
+        return definition.keypath ? filter(rawValue, this) : filter(this)
+      }
+      return rawValue
     }
   }
 }
 
-function convertFilter (props) {
+function modelFilter (props) {
   return (value) => {
     if (jstype.isObject(value)) {
-      return convert(value, props)
+      return model(value, props)
     } else if (jstype.isArray(value)) {
-      return convertArray(value, props)
+      return modelArray(value, props)
     }
 
     throw new Error('Value must be a object or an array.')
   }
 }
 
-function convert (object, definitions) {
+function propType (keypath = null) {
+  return new ModelPropType(keypath)
+}
+
+function model (object, definitions) {
   const adapter = new ModelMaker(object, definitions)
   return adapter.getModel()
 }
 
-function convertArray (objects, definitions) {
+function modelArray (objects, definitions) {
   if (!jstype.isArray(objects)) {
     return []
   }
 
   let list = []
   for (let object of objects) {
-    const model = convert(object, definitions)
-    if (model) {
-      list.push(model)
+    const m = model(object, definitions)
+    if (m) {
+      list.push(m)
     }
   }
   return list
 }
 
-export default {
-  types,
-  define,
-  convert,
-  convertArray
+export {
+  string,
+  number,
+  boolean,
+  array,
+  object,
+  setDev,
+  propType,
+  model,
+  modelArray
 }
