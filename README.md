@@ -10,7 +10,7 @@
 * 过滤
 * 模型数组、子模型
 
-# Example
+# 示例
 ```javascript
 import * as modelParser from 'c-model-parser'
 
