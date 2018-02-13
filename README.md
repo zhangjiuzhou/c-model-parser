@@ -1,7 +1,7 @@
 # c-model-parser
 定义和解析model。
 
-# 特性
+## 特性
 * 读取keypath
 * 类型检查
 * 容错
@@ -10,7 +10,7 @@
 * 过滤
 * 模型数组、子模型
 
-# 示例
+## 示例
 ```javascript
 import * as modelParser from 'c-model-parser'
 
